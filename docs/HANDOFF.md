@@ -12,7 +12,7 @@
 
 | 项 | 值 |
 |---|---|
-| 仓库根 | `C:\Users\User\Documents\deepseek-harness\default-workspaces`（**已是 git 仓库**：`main` 分支，`d7f2fb9` = v1.42 基线、`9f098e1` = v1.43 wip；暂无 remote，历史另见 `docs/PROGRESS.md`，云端交接见 §10） |
+| 仓库根 | `C:\Users\User\Documents\deepseek-harness\default-workspaces`（**已是 git 仓库**：`main` 分支，`d7f2fb9` = v1.42 基线、`9f098e1` = v1.43 wip、`095e07d` = 交接文档；`origin` = `https://github.com/FluorineCypher/shunlu.git`，`main` 已推送并跟踪 `origin/main`；历史另见 `docs/PROGRESS.md`，云端交接见 §10） |
 | 代码版本 | **v1.42 已全部落盘（v1.41 之后只加 v1.42：后台静默失败修复 + `/api/version` 的 DB 探针，见 §3.30）、`tsc` / `next build` 全绿（v1.33–v1.41 只动页面与两个只读接口：v1.35 是纯视觉 + 四处既有样式 bug，v1.36/v1.37 只改默认勾选数与加成文案，v1.38 加 `/api/version`，v1.39/v1.40 只改推荐卡面与文案，v1.41 只改两处推荐数裁剪 + 种子一条 runner；未动 schema / 规则 / 接口，`vitest` 未重跑）**；本机生产 job `bash-4b10694f78d44af3` 跑 `NODE_ENV=production npx next start -H 0.0.0.0 -p 3000`（进程里还是旧构建，要重启才到 v1.41）；**能连库的预览服务 job `bash-33cf0915fe704b2f` = `PORT=3998 npx next start -p 3998`，跑的是 `deploy/shunlu.env` 的线上库**（旧 3999 预览 `bash-2a215d89ede74b29` 已弃用：dev 库 `.env.local` 失效，走 DB 的路由全 503 `DB_TIMEOUT`）；v1.38 还添了 `GET /api/version`（返回 `version/release/uptimeSec/nodeEnv/port`）与「我的」页脚版本戳，专门用来核对线上跑的是哪一版） |
 | 公网 | https://shop.omzsh.top（CF 橙云 + 隧道 → ECS `47.97.167.178` 的 `127.0.0.1:3000`）；**2026-10-25 已部署 v1.21–v1.32 并通过三条 curl 验收（IP 200 / https 200 / 错口令 403，https 1.6s 属 CF 跨洋固定加价）**；**v1.33 的「推荐一起带走」卡面（已被 v1.34 撤掉）、v1.34 的接单页改造、v1.35 的纸感换肤、v1.36/v1.37 的加成默认勾选与死按钮修复、v1.38 的版本自证接口、v1.39 的加成四态文案、v1.40 的「推荐卡固定 2 单 + 同层优先」、v1.41 的「推荐数按真实并发位裁剪 + 种子 B 空手」都还没上去**（**2026-10-25 实测证据**：线上 `https://shop.omzsh.top/` served 的是 `app/page-ccb576e5151fe4db.js`，本地最新构建是 `app/page-3f57bc406e5f480d.js`，哈希不同 ⇒ 线上确实还是旧包，不是「改了没生效」） |
 | 口令 | 演示 `shunlu-demo-2026`、后台 `shunlu-admin-2026` |
@@ -1062,8 +1062,10 @@ npm run build         # 已过
 |---|---|
 | 仓库根 | `C:\Users\User\Documents\deepseek-harness\default-workspaces`（已 `git init -b main`） |
 | 本地身份 | `user.name=shunlu-demo` / `user.email=shunlu-demo@example.com`（仅本仓） |
-| 提交 | `d7f2fb9` v1.42 基线（147 条，`next-env.d.ts` 按 `.gitignore` 忽略）、`9f098e1` v1.43 wip（10 文件） |
+| 提交 | `d7f2fb9` v1.42 基线（147 条，`next-env.d.ts` 按 `.gitignore` 忽略）、`9f098e1` v1.43 wip（10 文件）、`095e07d` docs(handoff) 补本节 |
 | 跟踪文件 | `git ls-files` = **147** |
-| 远端 | **还没有**：本机无 `gh` CLI、无 SSH 私钥、`credential.helper` 为空 ⇒ 需要用户提供仓库地址 + 推送凭据（HTTPS token 或 SSH key） |
+| 远端 | `origin` = `https://github.com/FluorineCypher/shunlu.git`（公开仓库），`main` 已推送并跟踪 `origin/main`；远端头 = 本地 HEAD = `095e07dfabfe5068277f53a7e858524e29174bd5` |
+| 凭据 | 推送用一次性 HTTPS PAT，**未写入 `.git/config`**（`grep -c 'ghp_' .git/config` = 0），remote 保持不含 token 的干净地址；换设备推送需重新提供 token 或配置 SSH key |
+| 远端内容核对 | GitHub 树 210 条目 ≈ 147 文件，关键文件齐备；`node_modules`、`.data/`、`a08.jsonl`、`Untitled-1.*`、`ocg_*`、`next-env.d.ts` 均未上传 |
 
 `.gitignore` 已覆盖演示期杂物（`a08.jsonl`、`Untitled-1.*`、`ocg_*`、`snap*.json`、`*.lock`、`*.log` 等），`.data/` 整体不入库。
