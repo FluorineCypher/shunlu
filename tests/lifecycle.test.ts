@@ -14,7 +14,7 @@ import {
 } from "@/server/rules/orders";
 import { MIN_MS } from "@/server/rules/durations";
 import { toHallOrder, toOrderDetail } from "@/server/rules/serializers";
-import { SEED, A, B, D, E, PLATFORM, getUser, getOrder, escrowFen, logsOfOrder, assertUserBalance, failPendingAddons } from "./helpers";
+import { SEED, A, B, C, D, E, PLATFORM, getUser, getOrder, escrowFen, logsOfOrder, assertUserBalance, failPendingAddons } from "./helpers";
 
 describe("惰性过期与退款（规则 6 / 8，附录 A）", () => {
   it("open 超 accept_deadline → expired + 全额退发布者 + 托管归零", async () => {
@@ -35,7 +35,7 @@ describe("惰性过期与退款（规则 6 / 8，附录 A）", () => {
   });
 
   it("accepted 超 deliver_deadline → 回 open、清 runner、信用 −10、不退款", async () => {
-    const before = await getUser(B);
+    const before = await getUser(C); // v1.43 · #16 从 v1.41 起挂在 C 头上，扣分记 C
     const escrowBefore = await escrowFen(SEED.accepted);
     await advance(21 * MIN_MS);
     await expireSweep();
@@ -46,7 +46,7 @@ describe("惰性过期与退款（规则 6 / 8，附录 A）", () => {
     expect(order.batchId).toBeNull();
     expect(order.acceptDeadlineAt!.getTime()).toBeGreaterThan(order.createdAt.getTime());
 
-    const after = await getUser(B);
+    const after = await getUser(C);
     expect(after.creditScore).toBe(before.creditScore - 10);
     expect(await escrowFen(SEED.accepted)).toBe(escrowBefore); // 没动钱
   });
@@ -64,7 +64,7 @@ describe("惰性过期与退款（规则 6 / 8，附录 A）", () => {
     const order = await getOrder(SEED.open1);
     expect(order.status).toBe("abnormal");
     expect(await escrowFen(order.id)).toBe(0);
-    expect((await getUser(B)).creditScore).toBe(80); // #16 接单超时 −10 + 本单异常 −10
+    expect((await getUser(B)).creditScore).toBe(90); // 本单异常 −10（#16 超时的账记在 C 头上）
     expect((await getUser(D)).balanceFen - publisherBefore.balanceFen).toBe(750 + 700); // 12/13 过期退回（含捎带预算）
   });
 
@@ -92,7 +92,7 @@ describe("惰性过期与退款（规则 6 / 8，附录 A）", () => {
     // 350 → Y=263（round 262.5）、fee=87，守恒 350
     expect((await getUser(B)).balanceFen - runnerBefore.balanceFen).toBe(263);
     expect((await getUser(PLATFORM)).balanceFen - platformBefore.balanceFen).toBe(87);
-    expect((await getUser(B)).creditScore).toBe(91); // 100 −10（#16 超时）+1（本单完成）
+    expect((await getUser(B)).creditScore).toBe(101); // 100 +1（本单完成；#16 超时扣的是 C）
     await assertUserBalance(B);
     await assertUserBalance(D);
   });
@@ -137,9 +137,9 @@ describe("发布者动作", () => {
 
 describe("隐私出口过滤（规则 5）", () => {
   it("发布者本人查详情拿不到 phone_tail；接单跑腿者本人才拿得到", async () => {
-    const order = await getOrder(SEED.accepted); // runner = B, publisher = A
+    const order = await getOrder(SEED.accepted); // runner = C, publisher = A
 
-    const asRunner = toOrderDetail(order, { id: B });
+    const asRunner = toOrderDetail(order, { id: C });
     expect(asRunner.dropRoom).toBe("412");
     expect(asRunner.phoneTail).toBe("8841");
 
@@ -168,16 +168,16 @@ describe("隐私出口过滤（规则 5）", () => {
   });
 
   it("送达凭证对发布者可见，但房号/尾号仍然只有跑腿者可见", async () => {
-    await pickOrder(SEED.accepted, B);
-    await failPendingAddons(SEED.accepted, B);
-    const delivered = await deliverOrder(SEED.accepted, B, "https://example.com/proof.jpg");
+    await pickOrder(SEED.accepted, C);
+    await failPendingAddons(SEED.accepted, C);
+    const delivered = await deliverOrder(SEED.accepted, C, "https://example.com/proof.jpg");
 
     const asPublisher = toOrderDetail(delivered, { id: A });
     expect(asPublisher.proofPhotoUrl).toBe("https://example.com/proof.jpg");
     expect(asPublisher.dropRoom).toBeNull();
     expect(asPublisher.phoneTail).toBeNull();
 
-    const asRunner = toOrderDetail(delivered, { id: B });
+    const asRunner = toOrderDetail(delivered, { id: C });
     expect(asRunner.proofPhotoUrl).toBe("https://example.com/proof.jpg");
 
     const asStranger = toOrderDetail(delivered, { id: E });

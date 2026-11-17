@@ -745,6 +745,9 @@ export async function maybeCloseBatch(tx: Executor, batchId: number): Promise<vo
   }
 }
 
+/** v1.43 · 单次 sweep 最多处理多少单：剩下的留给下一次读接口，避免一次请求长时间占锁 */
+const EXPIRE_SWEEP_BATCH = 50;
+
 /**
  * 惰性过期判定（规则 8）：每次读接口前调用；也可直接跑全表。
  * - open 超 accept_deadline → expired + 全额退
@@ -752,6 +755,13 @@ export async function maybeCloseBatch(tx: Executor, batchId: number): Promise<vo
  * - picked 超 deliver_deadline → abnormal + 全额退 + 信用 −10
  * - delivered 超 auto_confirm_at → completed（系统自动确认）
  * 返回本次处理的订单数。
+ *
+ * v1.43（m00266）：以前是「一个事务扫完所有到期单」——只要有一张单的行锁被别的
+ * 请求攥着，整轮 sweep 就排在锁队列里，把后面所有读接口一起拖到 statement_timeout，
+ * 线上表现就是「大量 500」。现在改成逐单小事务 + `for update skip locked`：
+ *   · 每单只锁它自己，账本 / 事件 / 通知仍在同一个事务里，语义不变；
+ *   · 被别的事务锁住的单直接跳过（skip locked 不排队），下个请求再收；
+ *   · 单笔失败（锁等待超时 / 死锁）只跳过这一单，不连累其他单。
  */
 export async function expireSweep(nowValue?: Date | number): Promise<number> {
   // v1.11 · 性能：调用方已经取过模拟时间时直接传入，省掉一次往返
@@ -763,139 +773,156 @@ export async function expireSweep(nowValue?: Date | number): Promise<number> {
     and(eq(orders.status, "delivered"), lte(orders.autoConfirmAt, t)),
   );
 
-  /**
-   * v1.11 · 性能：先无事务探一下有没有「该处理」的单。
-   * 绝大多数读请求一条都没有，探一次就返回 —— 省掉原来每个请求都付的
-   * BEGIN / SELECT / COMMIT 三个往返（Neon 单条约 80ms，约 240ms/请求）。
-   * 真有待处理单时才开事务，在事务里重新取一次（保证并发下看到的是最新状态）。
-   */
-  const probe = await db.select({ id: orders.id }).from(orders).where(dueWhere).limit(1);
-  if (probe.length === 0) return 0;
+  // 先无事务探一下（绝大多数读请求一条都没有，省掉 BEGIN/COMMIT 与行锁）
+  const candidates = await db
+    .select({ id: orders.id })
+    .from(orders)
+    .where(dueWhere)
+    .limit(EXPIRE_SWEEP_BATCH);
+  if (candidates.length === 0) return 0;
 
-  return withTx(async (tx) => {
-    let handled = 0;
+  let handled = 0;
+  for (const { id } of candidates) {
+    const done = await withTx(async (tx) => {
+      // skip locked：这张单正被别的事务改（例如发布者刚点确认收货）就先放过，
+      // 绝不排队等锁；下一轮读接口它自然会重新进入 due。
+      const [order] = await tx
+        .select()
+        .from(orders)
+        .where(and(eq(orders.id, id), dueWhere))
+        .limit(1)
+        .for("update", { skipLocked: true });
+      if (!order) return 0;
+      return sweepOne(tx, order, t);
+    }).catch((err: unknown) => {
+      console.warn("[expireSweep] 单笔跳过", id, err instanceof Error ? err.message : err);
+      return 0;
+    });
+    handled += done;
+  }
+  return handled;
+}
 
-    const due = await tx.select().from(orders).where(dueWhere);
-    const expiredOpen = due.filter((o) => o.status === "open");
-    const timedOutAccepted = due.filter((o) => o.status === "accepted");
-    const timedOutPicked = due.filter((o) => o.status === "picked");
-    const autoConfirm = due.filter((o) => o.status === "delivered");
+/** 单笔到期单的状态分发（进入时已持有这一行的 FOR UPDATE 锁） */
+async function sweepOne(tx: Executor, order: OrderRow, t: Date): Promise<number> {
+  if (order.status === "open") {
+    const done = await transitionTo(tx, order, "expired", {
+      memo: "接单超时退回",
+      event: "expired",
+      notifyPublisher: order.expectDeliveryAt
+        ? `预约单 ${order.code} 到点还没人接单，已自动取消，冻结金额全额退回`
+        : `订单 ${order.code} 超时未接单，冻结金额已退回`,
+    });
+    return done ? 1 : 0;
+  }
+  if (order.status === "accepted") return sweepAcceptedTimeout(tx, order, t);
+  if (order.status === "picked") return sweepPickedTimeout(tx, order, t);
+  if (order.status === "delivered") return sweepAutoConfirm(tx, order, t);
+  return 0;
+}
 
-    for (const order of expiredOpen) {
-      const done = await transitionTo(tx, order, "expired", {
-        memo: "接单超时退回",
-        event: "expired",
-        notifyPublisher: order.expectDeliveryAt
-          ? `预约单 ${order.code} 到点还没人接单，已自动取消，冻结金额全额退回`
-          : `订单 ${order.code} 超时未接单，冻结金额已退回`,
-      });
-      if (done) handled += 1;
+/** accepted 超送达截止：buy 且已 request 超额度 → cancelled + 全额退；否则回 open（信用 −10） */
+async function sweepAcceptedTimeout(tx: Executor, order: OrderRow, t: Date): Promise<number> {
+  if (order.bizType === "buy" && order.budgetStatus === "requested") {
+    const [updated] = await tx
+      .update(orders)
+      .set({ status: "cancelled", budgetStatus: "abandoned", cancelReason: "超额度未获同意，超时取消", completedAt: t })
+      .where(and(eq(orders.id, order.id), eq(orders.status, "accepted")))
+      .returning();
+    if (!updated) return 0;
+    await refundEscrow(tx, { orderId: order.id, publisherId: order.publisherId, memo: "超额度未确认，全额退款" });
+    await recordEvent(tx, { orderId: order.id, type: "cancelled", payload: { reason: "budget_abandoned" } });
+    for (const uid of [order.publisherId, order.runnerId].filter((x): x is number => !!x)) {
+      await notify(tx, { userId: uid, orderId: order.id, content: `订单 ${order.code} 超额度未处理，已取消并全额退款` });
     }
-
-    for (const order of timedOutAccepted) {
-      if (order.bizType === "buy" && order.budgetStatus === "requested") {
-        const [updated] = await tx
-          .update(orders)
-          .set({ status: "cancelled", budgetStatus: "abandoned", cancelReason: "超额度未获同意，超时取消", completedAt: t })
-          .where(and(eq(orders.id, order.id), eq(orders.status, "accepted")))
-          .returning();
-        if (!updated) continue;
-        await refundEscrow(tx, { orderId: order.id, publisherId: order.publisherId, memo: "超额度未确认，全额退款" });
-        await recordEvent(tx, { orderId: order.id, type: "cancelled", payload: { reason: "budget_abandoned" } });
-        for (const uid of [order.publisherId, order.runnerId].filter((x): x is number => !!x)) {
-          await notify(tx, { userId: uid, orderId: order.id, content: `订单 ${order.code} 超额度未处理，已取消并全额退款` });
-        }
-        handled += 1;
-        continue;
-      }
-      const [updated] = await tx
-        .update(orders)
-        .set({
-          status: "open",
-          runnerId: null,
-          batchId: null,
-          acceptedAt: null,
-          deliverDeadlineAt: null,
-          acceptDeadlineAt: new Date(t.getTime() + ACCEPT_DEADLINE_MINUTES[1] * MIN_MS),
-          abnormalReason: "超时未送达",
-        })
-        .where(and(eq(orders.id, order.id), eq(orders.status, "accepted")))
-        .returning();
-      if (!updated) continue;
-      if (order.runnerId) await adjustCredit(tx, order.runnerId, -CREDIT_TIMEOUT_PENALTY);
-      await recordEvent(tx, { orderId: order.id, type: "timeout_released", payload: { status: "open" } });
-      await notify(tx, {
-        userId: order.publisherId,
-        orderId: order.id,
-        content: order.expectDeliveryAt
-          ? `预约单 ${order.code} 到点仍未送达，已重新上架（可再等等或取消退款）`
-          : `订单 ${order.code} 超时未送达，已重新上架`,
-      });
-      if (order.runnerId) {
-        await notify(tx, { userId: order.runnerId, orderId: order.id, content: `订单 ${order.code} 超时未送达，已释放（信用 −${CREDIT_TIMEOUT_PENALTY}）` });
-      }
-      handled += 1;
-    }
-
-    for (const order of timedOutPicked) {
-      const [updated] = await tx
-        .update(orders)
-        .set({ status: "abnormal", abnormalReason: "取货后超时未送达", completedAt: t })
-        .where(and(eq(orders.id, order.id), eq(orders.status, "picked")))
-        .returning();
-      if (!updated) continue;
-      await refundEscrow(tx, { orderId: order.id, publisherId: order.publisherId, memo: "超时异常全额退款" });
-      if (order.runnerId) await adjustCredit(tx, order.runnerId, -CREDIT_TIMEOUT_PENALTY);
-      if (order.batchId) await maybeCloseBatch(tx, order.batchId);
-      await recordEvent(tx, { orderId: order.id, type: "abnormal", payload: { reason: "picked_timeout" } });
-      await notify(tx, { userId: order.publisherId, orderId: order.id, content: `订单 ${order.code} 异常，已全额退款` });
-      handled += 1;
-    }
-
-    for (const order of autoConfirm) {
-      const [updated] = await tx
-        .update(orders)
-        .set({ status: "completed", completedAt: t, confirmedBy: "system" })
-        .where(and(eq(orders.id, order.id), eq(orders.status, "delivered")))
-        .returning();
-      if (!updated) continue;
-      // 改（m02503）：自动确认时若还有没上报的捎带项，按「没买到」落定，预算全额退回，绝不静默吞钱
-      const pendingAddons = (await addonsOf(tx, order.id)).filter((a) => a.status === "pending");
-      let settled: OrderRow = updated;
-      if (pendingAddons.length > 0) {
-        await tx
-          .update(orderAddons)
-          .set({ status: "failed", actualFen: 0 })
-          .where(and(eq(orderAddons.orderId, order.id), eq(orderAddons.status, "pending")));
-        const rows = await addonsOf(tx, order.id);
-        const actual = rows.reduce((sum, a) => sum + (a.status === "bought" ? (a.actualFen ?? 0) : 0), 0);
-        const [refreshed] = await tx.update(orders).set({ actualFen: actual }).where(eq(orders.id, order.id)).returning();
-        if (refreshed) settled = refreshed;
-        await recordEvent(tx, {
-          orderId: order.id,
-          type: "addons_auto_failed",
-          payload: { titles: pendingAddons.map((a) => a.title) },
-        });
-        if (settled.runnerId) {
-          await notify(tx, {
-            userId: settled.runnerId,
-            orderId: order.id,
-            content: `订单 ${settled.code} 自动确认：未上报的捎带项按「没买到」处理，预算已退回发布者`,
-          });
-        }
-      }
-      await settleCompletion(tx, settled);
-      if (updated.runnerId) await adjustCredit(tx, updated.runnerId, 1);
-      if (updated.batchId) await maybeCloseBatch(tx, updated.batchId);
-      await recordEvent(tx, { orderId: order.id, type: "completed", payload: { by: "system" } });
-      if (updated.runnerId) {
-        await notify(tx, { userId: updated.runnerId, orderId: order.id, content: `订单 ${updated.code} 已自动确认，收入到账` });
-      }
-      handled += 1;
-    }
-
-    return handled;
+    return 1;
+  }
+  const [updated] = await tx
+    .update(orders)
+    .set({
+      status: "open",
+      runnerId: null,
+      batchId: null,
+      acceptedAt: null,
+      deliverDeadlineAt: null,
+      acceptDeadlineAt: new Date(t.getTime() + ACCEPT_DEADLINE_MINUTES[1] * MIN_MS),
+      abnormalReason: "超时未送达",
+    })
+    .where(and(eq(orders.id, order.id), eq(orders.status, "accepted")))
+    .returning();
+  if (!updated) return 0;
+  if (order.runnerId) await adjustCredit(tx, order.runnerId, -CREDIT_TIMEOUT_PENALTY);
+  await recordEvent(tx, { orderId: order.id, type: "timeout_released", payload: { status: "open" } });
+  await notify(tx, {
+    userId: order.publisherId,
+    orderId: order.id,
+    content: order.expectDeliveryAt
+      ? `预约单 ${order.code} 到点仍未送达，已重新上架（可再等等或取消退款）`
+      : `订单 ${order.code} 超时未送达，已重新上架`,
   });
+  if (order.runnerId) {
+    await notify(tx, { userId: order.runnerId, orderId: order.id, content: `订单 ${order.code} 超时未送达，已释放（信用 −${CREDIT_TIMEOUT_PENALTY}）` });
+  }
+  return 1;
+}
+
+/** picked 超送达截止 → abnormal + 全额退 + 信用 −10 */
+async function sweepPickedTimeout(tx: Executor, order: OrderRow, t: Date): Promise<number> {
+  const [updated] = await tx
+    .update(orders)
+    .set({ status: "abnormal", abnormalReason: "取货后超时未送达", completedAt: t })
+    .where(and(eq(orders.id, order.id), eq(orders.status, "picked")))
+    .returning();
+  if (!updated) return 0;
+  await refundEscrow(tx, { orderId: order.id, publisherId: order.publisherId, memo: "超时异常全额退款" });
+  if (order.runnerId) await adjustCredit(tx, order.runnerId, -CREDIT_TIMEOUT_PENALTY);
+  if (order.batchId) await maybeCloseBatch(tx, order.batchId);
+  await recordEvent(tx, { orderId: order.id, type: "abnormal", payload: { reason: "picked_timeout" } });
+  await notify(tx, { userId: order.publisherId, orderId: order.id, content: `订单 ${order.code} 异常，已全额退款` });
+  return 1;
+}
+
+/** delivered 超自动确认时间 → completed（系统自动确认）+ 未上报捎带项按「没买到」落定 */
+async function sweepAutoConfirm(tx: Executor, order: OrderRow, t: Date): Promise<number> {
+  const [updated] = await tx
+    .update(orders)
+    .set({ status: "completed", completedAt: t, confirmedBy: "system" })
+    .where(and(eq(orders.id, order.id), eq(orders.status, "delivered")))
+    .returning();
+  if (!updated) return 0;
+  // 改（m02503）：自动确认时若还有没上报的捎带项，按「没买到」落定，预算全额退回，绝不静默吞钱
+  const pendingAddons = (await addonsOf(tx, order.id)).filter((a) => a.status === "pending");
+  let settled: OrderRow = updated;
+  if (pendingAddons.length > 0) {
+    await tx
+      .update(orderAddons)
+      .set({ status: "failed", actualFen: 0 })
+      .where(and(eq(orderAddons.orderId, order.id), eq(orderAddons.status, "pending")));
+    const rows = await addonsOf(tx, order.id);
+    const actual = rows.reduce((sum, a) => sum + (a.status === "bought" ? (a.actualFen ?? 0) : 0), 0);
+    const [refreshed] = await tx.update(orders).set({ actualFen: actual }).where(eq(orders.id, order.id)).returning();
+    if (refreshed) settled = refreshed;
+    await recordEvent(tx, {
+      orderId: order.id,
+      type: "addons_auto_failed",
+      payload: { titles: pendingAddons.map((a) => a.title) },
+    });
+    if (settled.runnerId) {
+      await notify(tx, {
+        userId: settled.runnerId,
+        orderId: order.id,
+        content: `订单 ${settled.code} 自动确认：未上报的捎带项按「没买到」处理，预算已退回发布者`,
+      });
+    }
+  }
+  await settleCompletion(tx, settled);
+  if (updated.runnerId) await adjustCredit(tx, updated.runnerId, 1);
+  if (updated.batchId) await maybeCloseBatch(tx, updated.batchId);
+  await recordEvent(tx, { orderId: order.id, type: "completed", payload: { by: "system" } });
+  if (updated.runnerId) {
+    await notify(tx, { userId: updated.runnerId, orderId: order.id, content: `订单 ${updated.code} 已自动确认，收入到账` });
+  }
+  return 1;
 }
 
 /** open → expired（条件更新 + 退款 + 事件 + 通知），返回是否真的处理了 */

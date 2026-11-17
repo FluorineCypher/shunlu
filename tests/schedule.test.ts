@@ -119,9 +119,9 @@ describe("预订单：提前下单与预计送达时间（v1.5）", () => {
 
   it("预约单没在承诺时间前送达，超时也会释放并扣信用（不依赖跑腿者主动反馈）", async () => {
     const created = await createOrder(E, { ...BASE, expectDeliveryMinutes: 20 });
-    // 用 C 接：种子单 16 在 B 手上，推进 21 分钟会一并超时，扣分会叠加
-    await acceptOrder(created.id, C);
-    const before = await getUser(C);
+    // v1.43 · 用 B 接：种子单 16 从 v1.41 起挂在 C 手上，推进 21 分钟会连带扣 C 的信用
+    await acceptOrder(created.id, B);
+    const before = await getUser(B);
 
     await advance(21 * 60_000);
     await expireSweep();
@@ -129,7 +129,7 @@ describe("预订单：提前下单与预计送达时间（v1.5）", () => {
     const released = await getOrder(created.id);
     expect(released.status).toBe("open");
     expect(released.runnerId).toBeNull();
-    const after = await getUser(C);
+    const after = await getUser(B);
     expect(after.creditScore).toBe(before.creditScore - 10);
   });
 

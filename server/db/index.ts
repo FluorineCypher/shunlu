@@ -63,7 +63,13 @@ function connect(): { sql: Sql; db: PostgresJsDatabase<Schema> } {
     idle_timeout: 20,
     max_lifetime: 60 * 2,
     connect_timeout: 8,
-    connection: { statement_timeout: 15000, idle_in_transaction_session_timeout: 30000 },
+    /**
+     * v1.43（m00266）· lock_timeout：等行锁最多 4s，超时让语句以 55P03 失败。
+     * 以前只有 statement_timeout 15s —— 一条被锁住的 UPDATE 会白等 15s 才报错，
+     * 4 条连接全被占满，后面的请求只能排队，线上表现就是「整站 500」。
+     * 短锁等待 + errors.ts 的 55P03→503 映射，让前端 4s 内就拿到「系统正忙」。
+     */
+    connection: { statement_timeout: 15000, idle_in_transaction_session_timeout: 30000, lock_timeout: 4000 },
   });
   _db = drizzle(_sql, { schema });
   return { sql: _sql, db: _db };

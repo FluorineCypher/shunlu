@@ -42,12 +42,13 @@ describe("A2 接单：原子性与容量（§3.2 / §3.4）", () => {
   });
 
   it("批次全部成功：生成批次、三单绑定同一 runner", async () => {
-    const { batchId, orders: accepted } = await acceptBatch([SEED.open1, SEED.open2, SEED.open3], C);
+    // v1.43 · #16 从 v1.41 起挂在 C 头上，C 只剩 2 个并发位；空手的 B 才能一次接 3 单
+    const { batchId, orders: accepted } = await acceptBatch([SEED.open1, SEED.open2, SEED.open3], B);
     expect(accepted).toHaveLength(3);
 
     const batch = (await db.select().from(batches).where(eq(batches.id, batchId)))[0];
     expect(batch.orderCount).toBe(3);
-    expect(batch.runnerId).toBe(C);
+    expect(batch.runnerId).toBe(B);
     expect(batch.expectedRewardFen).toBe(
       accepted.reduce((sum, o) => sum + o.runnerRewardFen, 0)
     );
@@ -55,7 +56,7 @@ describe("A2 接单：原子性与容量（§3.2 / §3.4）", () => {
     for (const id of [SEED.open1, SEED.open2, SEED.open3]) {
       const o = await getOrder(id);
       expect(o.status).toBe("accepted");
-      expect(o.runnerId).toBe(C);
+      expect(o.runnerId).toBe(B);
       expect(o.batchId).toBe(batchId);
     }
     // 接单不动钱：托管额仍是「奖励 + 捎带预算」全额
@@ -71,10 +72,30 @@ describe("A2 接单：原子性与容量（§3.2 / §3.4）", () => {
   });
 
   it("同时在手 3 单封顶（信用≥60 时）", async () => {
-    // B 已持有 1 单（#16），再拿 2 单到 3，第 4 单被拒
+    // v1.43 · #16 从 v1.41 起挂在 C 头上，B 是空手：先让 B 连拿 3 单，再造第 4 单试封顶
     await acceptOrder(SEED.open1, B);
     await acceptOrder(SEED.open2, B);
-    await expect(acceptOrder(SEED.open3, B)).rejects.toThrow(/同时最多 3 单/);
+    await acceptOrder(SEED.open3, B);
+    const extra = (
+      await db
+        .insert(orders)
+        .values({
+          code: "T-CAP-4",
+          publisherId: D,
+          bizType: "food",
+          status: "open",
+          pickupPoint: "东门外卖柜",
+          dropBuilding: "女寝3号楼",
+          dropFloor: 4,
+          dropRoom: "401",
+          phoneTail: "1234",
+          rewardFen: 400,
+          runnerRewardFen: 300,
+          acceptDeadlineAt: new Date(Date.now() + 10 * 60_000),
+        })
+        .returning()
+    )[0];
+    await expect(acceptOrder(extra.id, B)).rejects.toThrow(/同时最多 3 单/);
 
     const active = await db
       .select({ n: sql<number>`COUNT(*)::int` })

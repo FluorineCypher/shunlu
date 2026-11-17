@@ -102,9 +102,10 @@ describe("代买 M4 找零（§3.3 / 附录 A）", () => {
 
   it("超额度不回应到 deliver_deadline → abandoned + cancelled + 全额退款，跑腿者不扣信用", async () => {
     const order = await newBuyOrder(E, 300, 1000);
-    await acceptOrder(order.id, C);
-    await requestBudget(order.id, C, 1200);
-    const cBefore = await getUser(C);
+    // v1.43 · 用 B 接：#16 从 v1.41 起挂在 C 头上，+21 分钟会连带把 C 扣一次信用
+    await acceptOrder(order.id, B);
+    await requestBudget(order.id, B, 1200);
+    const bBefore = await getUser(B);
     const eBefore = await getUser(E);
 
     await advance(21 * MIN_MS);
@@ -116,7 +117,7 @@ describe("代买 M4 找零（§3.3 / 附录 A）", () => {
     expect(await escrowFen(order.id)).toBe(0);
 
     expect((await getUser(E)).balanceFen - eBefore.balanceFen).toBe(1300);
-    expect((await getUser(C)).creditScore).toBe(cBefore.creditScore);
+    expect((await getUser(B)).creditScore).toBe(bBefore.creditScore);
   });
 
   it("发布者没走 M4 就确认收货：额度余额随结算原路退回（fail-safe，托管归零）", async () => {
@@ -134,16 +135,17 @@ describe("代买 M4 找零（§3.3 / 附录 A）", () => {
 
 describe("批次加成（同楼 ≥3 单，每单 bonus = round(Y×5%)，平台让利）", () => {
   it("三单批次逐单结算：income = Y + bonus，fee = X − Y − bonus", async () => {
-    const cBefore = await getUser(C);
+    const bBefore = await getUser(B);
     const platformBefore = await getUser(PLATFORM);
 
-    const { batchId, orders } = await acceptBatch([SEED.open1, SEED.open2, SEED.open3], C);
+    // v1.43 · 用 B 接：#16 挂在 C 手上，C 已占 1 个并发位，接不下 3 单
+    const { batchId, orders } = await acceptBatch([SEED.open1, SEED.open2, SEED.open3], B);
     expect(orders).toHaveLength(3);
 
     for (const o of orders) {
-      await pickOrder(o.id, C);
-      await failPendingAddons(o.id, C);
-      await deliverOrder(o.id, C, photo);
+      await pickOrder(o.id, B);
+      await failPendingAddons(o.id, B);
+      await deliverOrder(o.id, B, photo);
       await confirmDelivered(o.id, o.publisherId);
     }
 
@@ -170,7 +172,7 @@ describe("批次加成（同楼 ≥3 单，每单 bonus = round(Y×5%)，平台�
       expect(await escrowFen(id)).toBe(0);
     }
 
-    expect((await getUser(C)).balanceFen - cBefore.balanceFen).toBe(expectedIncome + expectedBonus);
+    expect((await getUser(B)).balanceFen - bBefore.balanceFen).toBe(expectedIncome + expectedBonus);
     expect((await getUser(PLATFORM)).balanceFen - platformBefore.balanceFen).toBe(expectedFee);
     expect(expectedIncome + expectedBonus + expectedFee).toBe(350 + 400 + 500);
   });

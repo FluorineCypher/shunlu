@@ -90,15 +90,15 @@ describe("批次（P4）", () => {
   });
 
   it("批次加成：3 单同楼完成，每单 Y + bonus 入账，平台 fee = X − Y − bonus", async () => {
-    // B 种子里已有一单在手上，3 单批次改用 C（并发上限 3）
-    const res = await acceptBatch([SEED.open1, SEED.open2, SEED.open3], C);
+    // v1.43 · #16 从 v1.41 起挂在 C 头上，C 已占 1 个并发位；B 才是空手，3 单批次用 B
+    const res = await acceptBatch([SEED.open1, SEED.open2, SEED.open3], B);
     const ids = [SEED.open1, SEED.open2, SEED.open3];
 
     let expectIncome = 0;
     let expectBonus = 0;
     for (const id of ids) {
       const before = await getOrder(id);
-      await runToCompleted(id, C);
+      await runToCompleted(id, B);
       const after = await getOrder(id);
       expect(after.status).toBe("completed");
       const bonus = calcBonusFen(before.runnerRewardFen);
@@ -106,16 +106,16 @@ describe("批次（P4）", () => {
       expectBonus += bonus;
 
       const logs = await logsOfOrder(id);
-      expect(logs.find((l) => l.type === "income" && l.userId === C)?.amountFen).toBe(
+      expect(logs.find((l) => l.type === "income" && l.userId === B)?.amountFen).toBe(
         before.runnerRewardFen
       );
-      expect(logs.find((l) => l.type === "bonus" && l.userId === C)?.amountFen).toBe(bonus);
+      expect(logs.find((l) => l.type === "bonus" && l.userId === B)?.amountFen).toBe(bonus);
       expect(logs.find((l) => l.type === "fee")?.amountFen).toBe(before.rewardFen - before.runnerRewardFen - bonus);
       // 每单结算后托管清零
       expect(await escrowFen(id)).toBe(0);
     }
 
-    const detail = await getBatchDetail(res.batchId, C);
+    const detail = await getBatchDetail(res.batchId, B);
     expect(detail.bonusEligible).toBe(true);
     expect(detail.totals.expectedRewardFen).toBe(expectIncome);
     expect(detail.totals.potentialBonusFen).toBe(expectBonus);
@@ -125,7 +125,7 @@ describe("批次（P4）", () => {
     expect(detail.totals.settledCount).toBe(3);
     expect(detail.batch.allDone).toBe(true);
     expect((await getBatch(res.batchId))?.status).toBe("closed");
-    await assertUserBalance(C);
+    await assertUserBalance(B);
   });
 
   it("批次内一单超时不影响其他单；超时单回 open、其他单照常结算", async () => {

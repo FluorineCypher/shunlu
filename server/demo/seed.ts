@@ -13,6 +13,7 @@ import {
 } from "@/server/db/schema";
 import { calcRunnerRewardFen, PLATFORM_USER_ID } from "@/server/rules/constants";
 import { MIN_MS } from "@/server/rules/durations";
+import { Errors, isDbBusyError } from "@/server/rules/errors";
 import { resetClock } from "@/server/clock";
 
 /**
@@ -55,9 +56,21 @@ type NewLog = typeof walletLogs.$inferInsert;
 
 export async function resetAndSeed(): Promise<void> {
   // 1) 清库（含序列复位）
-  await db.execute(
-    sql`TRUNCATE TABLE ${orderEvents}, ${orderAddons}, ${walletLogs}, ${reviews}, ${notifications}, ${orders}, ${batches}, ${users}, ${demoConfig} RESTART IDENTITY CASCADE`
-  );
+  // v1.43（m00266）：TRUNCATE 要拿 ACCESS EXCLUSIVE 锁，任何一个还在跑的读请求都能把它堵住
+  // （之前后台「重置」会转几十秒然后 500）。这里给它短锁等待 + 明确的可读错误。
+  try {
+    await db.transaction(async (tx) => {
+      await tx.execute(sql`set local lock_timeout = '4000ms'`);
+      await tx.execute(
+        sql`TRUNCATE TABLE ${orderEvents}, ${orderAddons}, ${walletLogs}, ${reviews}, ${notifications}, ${orders}, ${batches}, ${users}, ${demoConfig} RESTART IDENTITY CASCADE`
+      );
+    });
+  } catch (err) {
+    if (isDbBusyError(err)) {
+      throw Errors.busy("后台正忙（有读请求或另一个重置还没结束），请等 2 秒再点一次重置");
+    }
+    throw err;
+  }
 
   // 2) 时钟归零：倍率 1，锚点=当前真实时间（模拟时间 ≈ 真实时间起跑）
   const base = await resetClock(1);
