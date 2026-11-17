@@ -12,7 +12,7 @@
 
 | 项 | 值 |
 |---|---|
-| 仓库根 | `C:\Users\User\Documents\deepseek-harness\default-workspaces`（**不是 git 仓库**，没有 commit 可查，历史全在 `docs/PROGRESS.md`） |
+| 仓库根 | `C:\Users\User\Documents\deepseek-harness\default-workspaces`（**已是 git 仓库**：`main` 分支，`d7f2fb9` = v1.42 基线、`9f098e1` = v1.43 wip；暂无 remote，历史另见 `docs/PROGRESS.md`，云端交接见 §10） |
 | 代码版本 | **v1.42 已全部落盘（v1.41 之后只加 v1.42：后台静默失败修复 + `/api/version` 的 DB 探针，见 §3.30）、`tsc` / `next build` 全绿（v1.33–v1.41 只动页面与两个只读接口：v1.35 是纯视觉 + 四处既有样式 bug，v1.36/v1.37 只改默认勾选数与加成文案，v1.38 加 `/api/version`，v1.39/v1.40 只改推荐卡面与文案，v1.41 只改两处推荐数裁剪 + 种子一条 runner；未动 schema / 规则 / 接口，`vitest` 未重跑）**；本机生产 job `bash-4b10694f78d44af3` 跑 `NODE_ENV=production npx next start -H 0.0.0.0 -p 3000`（进程里还是旧构建，要重启才到 v1.41）；**能连库的预览服务 job `bash-33cf0915fe704b2f` = `PORT=3998 npx next start -p 3998`，跑的是 `deploy/shunlu.env` 的线上库**（旧 3999 预览 `bash-2a215d89ede74b29` 已弃用：dev 库 `.env.local` 失效，走 DB 的路由全 503 `DB_TIMEOUT`）；v1.38 还添了 `GET /api/version`（返回 `version/release/uptimeSec/nodeEnv/port`）与「我的」页脚版本戳，专门用来核对线上跑的是哪一版） |
 | 公网 | https://shop.omzsh.top（CF 橙云 + 隧道 → ECS `47.97.167.178` 的 `127.0.0.1:3000`）；**2026-10-25 已部署 v1.21–v1.32 并通过三条 curl 验收（IP 200 / https 200 / 错口令 403，https 1.6s 属 CF 跨洋固定加价）**；**v1.33 的「推荐一起带走」卡面（已被 v1.34 撤掉）、v1.34 的接单页改造、v1.35 的纸感换肤、v1.36/v1.37 的加成默认勾选与死按钮修复、v1.38 的版本自证接口、v1.39 的加成四态文案、v1.40 的「推荐卡固定 2 单 + 同层优先」、v1.41 的「推荐数按真实并发位裁剪 + 种子 B 空手」都还没上去**（**2026-10-25 实测证据**：线上 `https://shop.omzsh.top/` served 的是 `app/page-ccb576e5151fe4db.js`，本地最新构建是 `app/page-3f57bc406e5f480d.js`，哈希不同 ⇒ 线上确实还是旧包，不是「改了没生效」） |
 | 口令 | 演示 `shunlu-demo-2026`、后台 `shunlu-admin-2026` |
@@ -1012,3 +1012,58 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST https://shop.omzsh.top/api/demo
 | `.data/e2e-v110.mjs` | 36 条 e2e 用例（v1.10 回归） |
 
 > `.data/` 整体不进 tar（`--exclude=./.data`），只在本机用。
+---
+
+## 10. v1.43 未完成交接（2026-11-17 定稿，代码已落盘、未发版）
+
+> 这一节是给「换设备继续干」的入口：v1.43 的代码已写完并通过测试，**只差文档、重打包、部署**三步。
+
+### 10.1 为什么要 v1.43（线上「大量 500」的根因）
+
+| 现象 | 证据 | 结论 |
+|---|---|---|
+| 后台输入口令后无反应 | 错口令 401、对口令 200 + `sl_console` cookie 均正常；`GET /api/console/snapshot` 带 cookie 稳定 **20.03s → 500**，绕 Cloudflare 直连 `http://47.97.167.178:3000` 同样 | 故障在数据层，不在鉴权/前端 |
+| 同时刻 `/api/version` 的 `db:{ok:true,ms:847}`、Neon 直连 `count(*)` 470ms，但 `/api/hall` → 503 `DB_TIMEOUT` 21.31s | `pg_locks` 未授予 20、`pg_stat_activity` 队头 `xact_age` 175s 仍在 `insert into order_events`，其后 15 个会话排 `update orders set status where id=$3 and status=$4`（`orders` 表 16 个未授予 `ExclusiveLock`） | **不是 Neon 坏，是应用自己的写事务持锁把全站排队打满** |
+| 队列 3 分钟后自清，`snapshot` 恢复 200 2.29s | 14:12 复测 `LOCKS []` | 间歇性；`db.ok`/`select 1` 正常**不能**证明写路径可用 |
+
+放大器两条：`expireSweep`（每个读接口都跑）是一个覆盖全表到期单的**单个长事务**；`reset` 的 `TRUNCATE`（`server/demo/seed.ts:59`）会拿全表锁。连接池 `max: 4`，4 条连接全卡在锁等待上 ⇒ 全站 500。
+
+### 10.2 已改完的 5 处（工作区已落盘，`9f098e1` 提交里）
+
+| 文件 | 改动 |
+|---|---|
+| `server/rules/errors.ts` | 新增 `Errors.busy()`（`code="DB_BUSY"`、503）、`DB_BUSY_SQLSTATES = new Set(["55P03","57014","40P01"])`、`dbBusyState(err, depth=0)`（递归 `.cause` 深度 3）、`isDbBusyError`；`toErrorResponse` 命中时 `console.warn` 并返回 503 `{code:"DB_BUSY"}` |
+| `server/db/index.ts:66` | 连接参数加 `lock_timeout: 4000`（锁等 4s 就放弃，不再排到 `statement_timeout` 15s） |
+| `server/rules/orders.ts` | 加 `EXPIRE_SWEEP_BATCH = 50`；`expireSweep` 改为「无锁 probe → 逐 id 各开一个小 `withTx` + `.for("update", { skipLocked: true })`」，拆出 `sweepOne` / `sweepAcceptedTimeout` / `sweepPickedTimeout` / `sweepAutoConfirm`，语义逐条保持不变 |
+| `server/demo/seed.ts` | `TRUNCATE` 包进事务并先 `set local lock_timeout = '4000ms'`；catch `isDbBusyError` → `Errors.busy("后台正忙（有读请求或另一个重置还没结束），请等 2 秒再点一次重置")` |
+| `lib/version.ts` | `APP_VERSION = "v1.43"`（`APP_RELEASE` 仍 `2026-11-17`） |
+
+### 10.3 验证状态（换设备后请照抄跑一遍）
+
+```
+npx tsc --noEmit      # 已过
+npx vitest run        # 13 文件 125 例全绿，29.36s（已过）
+npm run build         # 已过
+```
+
+**坑（务必记住）**：v1.43 改 `server/demo/seed.ts` 之前，套件里有 8+3 例是「陈年红」——v1.41 把 `server/demo/seed.ts:212` 的 #16（`code SL-SEED-0016`，A 发、房 412、尾号 8841、`rewardFen 400`、`status accepted`）从 B 改挂到 C，断言没跟着改。修法是把断言同步到新种子（#16 归 C；批次与「3 单封顶」用例改用空手的 B，另 `db.insert` 一张 `T-CAP-4` 假单造第 4 单），**不是回滚种子**。以后改种子必须跑全量 `vitest`，只跑 `tsc` + `build` 会漏。
+
+### 10.4 还差的三步（按顺序）
+
+1. **`docs/PROGRESS.md` 追加 v1.43 条目**（三段式：做了什么 / 怎么验证 / 已知缺口），当前末条是 v1.42。
+2. **重打源码包**：`tar -czf .data/shunlu-src.tgz --exclude=./.data --exclude=./node_modules --exclude=./.next --exclude=./.git .` → 目标 **148 条**（`next-env.d.ts` 在内），并记下新的 `sha256sum` 与字节数回填本文第 19 行；注意 `.git/` 现在存在，必须排除。
+3. **部署 ECS**：`scp .data/shunlu-src.tgz root@47.97.167.178:/root/` → `cd /root && rm -rf /root/src && mkdir -p /root/src && tar -xzf /root/shunlu-src.tgz -C /root/src` → `bash /root/src/deploy/deploy-app.sh shunlu 3000 /root/src`。验收：`curl -s https://shop.omzsh.top/api/version` 显示 `v1.43`；带 `sl_console` cookie 的 `GET /api/console/snapshot` 稳定 200（不再 20s 500）；`node scripts/preflight.mjs --base http://127.0.0.1:3000` 全 PASS。
+
+> 部署时若仍撞锁，预期是新行为：接口返回 **503 `DB_BUSY`**（快失败，可重试），而不是 20 秒后 500。看到 `DB_BUSY` 说明 `lock_timeout` 生效，属于设计内。
+
+### 10.5 云端 git 状态（2026-11-17 新增）
+
+| 项 | 值 |
+|---|---|
+| 仓库根 | `C:\Users\User\Documents\deepseek-harness\default-workspaces`（已 `git init -b main`） |
+| 本地身份 | `user.name=shunlu-demo` / `user.email=shunlu-demo@example.com`（仅本仓） |
+| 提交 | `d7f2fb9` v1.42 基线（147 条，`next-env.d.ts` 按 `.gitignore` 忽略）、`9f098e1` v1.43 wip（10 文件） |
+| 跟踪文件 | `git ls-files` = **147** |
+| 远端 | **还没有**：本机无 `gh` CLI、无 SSH 私钥、`credential.helper` 为空 ⇒ 需要用户提供仓库地址 + 推送凭据（HTTPS token 或 SSH key） |
+
+`.gitignore` 已覆盖演示期杂物（`a08.jsonl`、`Untitled-1.*`、`ocg_*`、`snap*.json`、`*.lock`、`*.log` 等），`.data/` 整体不入库。
