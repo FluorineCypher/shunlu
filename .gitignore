@@ -1,0 +1,35 @@
+node_modules/
+.next/
+.data/
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+
+# 演示期调试杂物（不属于源码；2026-11-17 上云前清理）
+.dsh-ops-update-*.lock
+/a08.jsonl
+/Untitled-1.c
+/Untitled-1.exe
+/dsh-opencode-go-*.tgz
+/Drawing Loading Code.txt
+/body.txt
+/c.txt
+/jar.txt
+/ocg_*.mjs
+/ocg_*.cjs
+/ocg_*.ps1
+/analyze-session.mjs
+/dump-session.mjs
+/bench-*.mjs
+/bench-sample.md
+/probe-*.mjs
+/probe-*.json
+/snap*.json
+/hall.json
+/hall2.json
+/me.json
+/s1.json
+/s2.json
+/s3.json
+/tools50.json
+*.log

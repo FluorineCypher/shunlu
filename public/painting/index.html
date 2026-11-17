@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>顺路 · 正在准备</title>
+<style>
+  :root {
+    color-scheme: light;
+    --side: 300px;          /* 画布边长，fit() 按视口写入 */
+    --paper: #f6f1e7;       /* 与父页面纸层同色，淡出时看不出接缝 */
+  }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--paper);
+  }
+  body {
+    display: flex; align-items: center; justify-content: center;
+    padding: clamp(6px, 2.1vmin, 26px); box-sizing: border-box;
+    font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", "Helvetica Neue", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background: radial-gradient(130% 95% at 50% -10%, #fffdf8 0%, #f7f1e5 52%, #eee6d6 100%);
+  }
+  /* 整屏纸纹：极淡的横竖纤维 + 柔和暗角，大屏上不留一块突兀的大白 */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background-image:
+      repeating-linear-gradient(0deg, rgba(122, 104, 74, 0.028) 0 1px, transparent 1px 3px),
+      repeating-linear-gradient(90deg, rgba(122, 104, 74, 0.022) 0 1px, transparent 1px 4px);
+    mix-blend-mode: multiply;
+  }
+  body::after {
+    content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background: radial-gradient(78% 62% at 50% 44%, transparent 52%, rgba(64, 52, 34, 0.10) 100%);
+  }
+  .stage {
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: clamp(10px, 2.4vmin, 26px); max-width: 100%; max-height: 100%;
+  }
+  .sheet {
+    padding: clamp(5px, 0.9vmin, 12px);
+    background: #fdfaf3;
+    border-radius: clamp(10px, 1.6vmin, 22px);
+    box-shadow: 0 26px 60px -34px rgba(52, 43, 30, 0.55), 0 3px 10px rgba(52, 43, 30, 0.07),
+      inset 0 0 0 1px rgba(120, 100, 70, 0.07);
+  }
+  .sheet canvas {
+    display: block; border-radius: inherit;
+    width: var(--side) !important; height: var(--side) !important;
+  }
+  #sheet { line-height: 0; }
+  .cap { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  /* v1.27：一条极细的蓝线跟着画笔走——蓝色只做点缀，不抢画本身 */
+  .rule {
+    width: min(44vmin, 230px); height: 1px; margin-top: 3px; border-radius: 1px;
+    background: rgba(31, 35, 43, 0.09); overflow: hidden;
+  }
+  .rule i {
+    display: block; height: 100%; width: 100%;
+    transform: scaleX(0); transform-origin: 0 50%;
+    background: #3e98ff; opacity: 0.5;
+    transition: transform 240ms linear;
+  }
+  .brand {
+    font-size: clamp(11px, 0.95vmin + 8px, 15px);
+    letter-spacing: 0.34em; padding-left: 0.34em;
+    color: #1f232b; opacity: 0.68;
+  }
+  .status {
+    font-size: clamp(11.5px, 1.1vmin + 8.5px, 14px);
+    letter-spacing: 0.06em; color: #a8a29a;
+    min-height: 1.35em; transition: opacity 260ms ease;
+  }
+  .status.fade { opacity: 0; }
+  /* 横屏 / 宽屏：字放右边，画布吃满高度 */
+  @media (orientation: landscape) and (min-aspect-ratio: 5/4) {
+    .stage { flex-direction: row; gap: clamp(14px, 3vmin, 40px); }
+    .cap { align-items: flex-start; gap: 8px; }
+  }
+  @media (max-height: 420px) {
+    .brand { display: none; }
+    .cap { gap: 2px; }
+  }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="sheet" id="sheet"></div>
+  <div class="cap">
+    <div class="brand">顺 路</div>
+    <div class="status" id="status">正在铺纸…</div>
+    <div class="rule"><i id="rule"></i></div>
+  </div>
+</div>
+
+<script src="/painting/vendor/p5.min.js"></script>
+<script src="/painting/vendor/p5.brush.js"></script>
+<script src="/painting/engine.js"></script>
+<script src="/painting/style-impressionism.js"></script>
+<script src="/painting/style-abstraction.js"></script>
+<script>
+(function () {
+  var SPEED = 2.4;            // 2.4x：9s 的一幅画约 3.8s 收笔（完整画完，不做截断）
+  var statusEl = document.getElementById("status");
+
+  function post(msg) {
+    if (window.parent === window) return;
+    try {
+      msg.source = "shunlu-painting";
+      window.parent.postMessage(msg, "*");
+    } catch (e) { /* 父窗口可能已经走了 */ }
+  }
+
+  /* 画布随视口：手机上吃满宽度，桌面/横屏吃满高度，字换到右侧。
+     只改 CSS 上的显示边长（600 的绘制缓冲不动），放大最多约 1.7 倍，
+     对一幅手绘质感的画完全够，改分辨率反而会让笔刷比例失真。 */
+  function fit() {
+    var vw = window.innerWidth, vh = window.innerHeight;
+    var pad = Math.min(26, Math.max(8, Math.min(vw, vh) * 0.022));
+    var horizontal = vw > vh * 1.15;
+    var cap = horizontal
+      ? Math.min(120, vw * 0.16)
+      : (vh < 420 ? 26 : (vh < 620 ? 44 : 62));
+    var avail = horizontal
+      ? Math.min(vw - pad * 2 - cap, vh - pad * 2)
+      : Math.min(vw - pad * 2, vh - pad * 2 - cap);
+    var side = Math.max(140, Math.min(960, Math.round(avail)));
+    document.documentElement.style.setProperty("--side", side + "px");
+  }
+  fit();
+  var resizeTimer = null;
+  window.addEventListener("resize", function () {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(fit, 120);
+  });
+
+  var STYLES = window.STYLES || {};
+  var keys = Object.keys(STYLES);
+  if (!keys.length) {
+    statusEl.textContent = "正在加载…";
+    return;
+  }
+  var params = new URLSearchParams(window.location.search);
+  var asked = params.get("k");
+  var key = asked && STYLES[asked] ? asked : keys[Math.floor(Math.random() * keys.length)];
+  var cfg = STYLES[key];
+  window.__shunluPainting = { key: key, speed: SPEED };
+  document.documentElement.setAttribute("data-painting", key);
+
+  // 中文短句：让「起稿 → 收笔」的节奏对得上画面
+  cfg.palette.phrases = ["起稿…", "铺色…", "落笔…", "细描…", "点景…", "收笔…", "完成"];
+
+  var engine = createEngine(cfg, {
+    mount: document.getElementById("sheet"),
+    statusEl: statusEl,
+    speed: SPEED,
+    once: true,
+    onProgress: function (p) {
+      var bar = document.getElementById("rule");
+      if (bar) bar.style.transform = "scaleX(" + p.toFixed(3) + ")";
+    }
+  });
+
+  window.setup = function () {
+    engine.setup();
+    post({ ready: true, key: key, speed: SPEED });
+  };
+  window.draw = function () { engine.draw(); };
+})();
+</script>
+</body>
+</html>

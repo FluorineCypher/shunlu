@@ -1,0 +1,1 @@
+ALTER TABLE "orders" ADD COLUMN "expect_delivery_at" timestamp with time zone;

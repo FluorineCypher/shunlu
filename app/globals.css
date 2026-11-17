@@ -1,0 +1,795 @@
+@import "tailwindcss";
+
+/* ===== 设计 tokens · 极简中性风 ===== */
+:root {
+  --c-bg: #fafafa;          /* 页面背景 */
+  --c-surface: #ffffff;     /* 卡片 / 输入框 */
+  --c-surface-2: #f4f4f5;   /* 分段控件底、弱底块 */
+  --c-ink: #18181b;         /* 主文字 */
+  --c-ink-2: #52525b;       /* 次级文字 */
+  --c-ink-3: #a1a1aa;       /* 提示 / 时间戳 */
+  --c-border: #e4e4e7;      /* 1px 细边框 */
+  --c-border-2: #eff0f1;    /* 更浅的内部分隔线 */
+  --c-accent: #b45309;      /* 唯一强调色（低饱和琥珀）：金额 / 收益 / 链接 */
+  --c-accent-soft: #faf7f2; /* 强调色弱底 */
+  --c-accent-border: #ecdfd0;
+  --c-danger: #dc2626;      /* 仅取消 / 异常 / 临期 */
+
+  --radius-sm: 8px;
+  --radius: 10px;
+  --radius-lg: 12px;
+
+  --shadow-1: 0 1px 2px rgba(16, 17, 20, 0.05);
+  --shadow-2: 0 4px 12px rgba(16, 17, 20, 0.06);
+
+  --dur: 160ms;
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  /* v1.30：松手回弹用的 spring，按下去要快、弹回来要带一点点过冲 */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+body {
+  background: var(--c-bg);
+  color: var(--c-ink);
+  -webkit-font-smoothing: antialiased;
+  font-family:
+    Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", "Helvetica Neue", sans-serif;
+}
+
+/* 数字等宽：余额 / 倒计时刷新时不抖动 */
+.sl-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ===== 复合组件类（全部由 tokens 派生） ===== */
+
+/* 卡片：白底 + 1px 细边框 + 极轻阴影 */
+.sl-card {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+/* 页面标题：克制，不过度加粗 */
+.sl-title {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--c-ink);
+}
+
+/* 弱区块标题（时间轴 / 流水） */
+.sl-section {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-ink-3);
+}
+
+/* 输入框 / 文本域 */
+.sl-field {
+  width: 100%;
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--c-ink);
+  outline: none;
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.sl-field::placeholder {
+  color: var(--c-ink-3);
+}
+.sl-field:focus {
+  border-color: #d0d0d4;
+  box-shadow: 0 0 0 3px rgba(24, 24, 27, 0.05);
+}
+
+/* 表单标签 */
+.sl-label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-ink-2);
+}
+
+/* 按钮基类：v1.30 两段式手感 —— 按下 90ms 速降到 .97，松手 260ms spring 回弹。
+   参考 Emil Kowalski《7 Practical Animation Tips》：scale(0.97) + 短时长是性价比最高的按压反馈。 */
+.sl-btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1;
+  -webkit-tap-highlight-color: transparent;
+  transition: opacity var(--dur) var(--ease), transform 260ms var(--ease-spring),
+    background-color var(--dur) var(--ease), border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.sl-btn:active:not(:disabled) {
+  transform: scale(0.97);
+  transition-duration: 90ms;
+  transition-timing-function: var(--ease);
+}
+.sl-btn:disabled {
+  opacity: 0.45;
+  transform: none;
+  cursor: not-allowed;
+}
+/* 墨色主按钮按下时压暗一档：深色底上位移不明显，靠底色给第二重反馈 */
+.sl-btn-primary:active:not(:disabled) {
+  background: #2c2c31;
+}
+.sl-btn[data-loading="true"] {
+  opacity: 0.8;
+}
+
+/* 行内转圈：尺寸跟字号走、颜色跟 currentColor，任何底色的按钮都能直接用 */
+.sl-spinner {
+  flex: none;
+  width: 1em;
+  height: 1em;
+  border-radius: 999px;
+  border: 1.5px solid currentColor;
+  border-top-color: transparent;
+  border-right-color: transparent;
+  animation: sl-spin 620ms linear infinite;
+}
+@keyframes sl-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 三点跳动：替代「加载中…」那种静止小字（思路同 antd-mobile DotLoading，尺寸跟随字号） */
+.sl-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.sl-dots > i {
+  width: 4px;
+  height: 4px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: sl-dot 1.05s ease-in-out infinite;
+}
+.sl-dots > i:nth-child(2) { animation-delay: 0.16s; }
+.sl-dots > i:nth-child(3) { animation-delay: 0.32s; }
+@keyframes sl-dot {
+  0%, 60%, 100% { opacity: 0.25; transform: translateY(0) scale(0.85); }
+  30% { opacity: 1; transform: translateY(-2px) scale(1); }
+}
+
+/* 主按钮：墨色填充 */
+.sl-btn-primary {
+  background: var(--c-ink);
+  color: #ffffff;
+  border: 1px solid transparent;
+}
+
+/* 次按钮：白底 1px 细边框 */
+.sl-btn-secondary {
+  background: var(--c-surface);
+  color: var(--c-ink-2);
+  border: 1px solid var(--c-border);
+}
+.sl-btn-secondary:hover {
+  border-color: var(--c-ink-3);
+}
+
+/* 危险动作：白底红字细红边 */
+.sl-btn-danger {
+  background: var(--c-surface);
+  color: var(--c-danger);
+  border: 1px solid #fecaca;
+}
+
+/* 分段控件（外卖/代买、我的两 Tab） */
+.sl-seg {
+  display: flex;
+  background: var(--c-surface-2);
+  border-radius: var(--radius);
+  padding: 3px;
+}
+.sl-seg-item {
+  flex: 1;
+  border-radius: var(--radius-sm);
+  padding: 6px 0;
+  font-size: 12px;
+  color: var(--c-ink-2);
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease), transform 260ms var(--ease-spring);
+}
+.sl-seg-item:active {
+  transform: scale(0.97);
+  transition-duration: 90ms;
+  transition-timing-function: var(--ease);
+}
+.sl-seg-item[data-active="true"] {
+  background: var(--c-surface);
+  font-weight: 500;
+  color: var(--c-ink);
+  box-shadow: var(--shadow-1);
+}
+
+/* 中性 tag（外卖 / 代买）：低饱和，不抢焦点 */
+.sl-tag {
+  display: inline-block;
+  border-radius: var(--radius-sm);
+  background: var(--c-surface-2);
+  padding: 2px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--c-ink-2);
+}
+
+/* 警示 tag（异常单 / 还有没确认的捎带项）：只在需要管理员注意时用 */
+.sl-tag-warn {
+  background: rgba(220, 38, 38, 0.08);
+  color: var(--c-danger);
+}
+
+/* 筛选 chip（楼栋） */
+.sl-chip {
+  flex-shrink: 0;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12px;
+  background: var(--c-surface);
+  color: var(--c-ink-2);
+  border: 1px solid var(--c-border);
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--dur) var(--ease), color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease), transform 260ms var(--ease-spring);
+}
+.sl-chip:active {
+  transform: scale(0.96);
+  transition-duration: 90ms;
+  transition-timing-function: var(--ease);
+}
+.sl-chip[data-active="true"] {
+  background: var(--c-ink);
+  color: #ffffff;
+  border-color: var(--c-ink);
+  font-weight: 500;
+}
+
+/* 强调色弱底块（同楼等待卡 / 送达信息） */
+.sl-soft {
+  background: var(--c-accent-soft);
+  border: 1px solid var(--c-accent-border);
+  border-radius: var(--radius-lg);
+}
+
+/* 全局键盘焦点环（可访问性） */
+:focus-visible {
+  outline: 2px solid rgba(180, 83, 9, 0.4);
+  outline-offset: 2px;
+}
+
+/* 隐藏横向滚动条（楼栋筛选、进行中横滑） */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* v1.26 · 首屏揭幕（components/PaintingSplash.tsx）：
+   纸层盖住整屏时页面内容先隐着，画完纸层淡出的同时页面淡入。
+   只动 opacity、不动 transform —— 否则 AppShell 里的 sticky 顶栏与 fixed 底栏会跟着错位。 */
+[data-splash-page] {
+  transition: opacity 620ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+html[data-splash="hold"] [data-splash-page] {
+  opacity: 0;
+}
+html[data-splash="out"] [data-splash-page] {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-splash-page] {
+    transition: none;
+  }
+}
+
+/* ===== v1.27 · 蓝与字体：只做点缀，不换皮 ===== */
+:root {
+  --c-brand: #3e98ff;       /* 品牌蓝：焦点 / 选中 / 进度条，不做大面积填充 */
+  --c-brand-ink: #1f6fd9;   /* 蓝字，浅底可读 */
+  --c-brand-line: rgba(62, 152, 255, 0.42);
+  --fs-label: 11px;
+  --track-label: 0.14em;
+}
+
+/* 数字与英文用自托管等宽体（拉丁子集 ~62KB），中文仍走系统字体 */
+.sl-num {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.sl-mono {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: var(--fs-label);
+  letter-spacing: var(--track-label);
+  text-transform: uppercase;
+}
+.sl-display {
+  font-family: var(--font-display), Georgia, "Times New Roman", serif;
+  letter-spacing: -0.02em;
+}
+:focus-visible { outline: 2px solid var(--c-brand-line); outline-offset: 2px; }
+
+/* ===== v1.28 · 高级感层（图标底栏 / 路由过渡 / 标题排版 / 卡片 stagger） ===== */
+
+:root {
+  --nav-h: 58px;
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.22, 1.12, 0.3, 1);
+}
+
+/* 底栏：图标 + 文字 + 滑动药丸，激活时图标描边重绘 */
+.sl-nav {
+  position: fixed;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 30;
+  border-top: 1px solid color-mix(in srgb, var(--c-border-2) 80%, transparent);
+  background: color-mix(in srgb, var(--c-surface) 93%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: 0 -1px 24px rgba(24, 24, 27, 0.05);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.sl-nav-track {
+  position: relative;
+  display: flex;
+  height: var(--nav-h);
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 6px 8px;
+}
+
+.sl-nav-pill {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 8px;
+  width: calc((100% - 16px) / 3);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(24, 24, 27, 0.075), rgba(24, 24, 27, 0.032));
+  box-shadow: inset 0 0 0 1px rgba(24, 24, 27, 0.05);
+  transform: translate3d(calc(var(--i, 0) * 100%), 0, 0);
+  transition: transform 540ms var(--ease-spring);
+  pointer-events: none;
+}
+
+.sl-nav-item {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  color: var(--c-ink-3);
+  text-decoration: none;
+  transition: color 240ms var(--ease), transform 200ms var(--ease);
+}
+.sl-nav-item:active { transform: scale(0.94); }
+.sl-nav-item[data-active="true"] { color: var(--c-ink); }
+
+.sl-nav-icon {
+  width: 22px;
+  height: 22px;
+  transition: transform 460ms var(--ease-spring);
+}
+.sl-nav-item[data-active="true"] .sl-nav-icon { transform: translateY(-1px) scale(1.05); }
+.sl-nav-item[data-active="true"] .sl-nav-icon > * {
+  animation: sl-draw 720ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+@keyframes sl-draw {
+  from { stroke-dasharray: 1; stroke-dashoffset: 1; }
+  to { stroke-dasharray: 1; stroke-dashoffset: 0; }
+}
+
+.sl-nav-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.06em;
+}
+.sl-nav-item[data-active="true"] .sl-nav-label { font-weight: 600; }
+
+.sl-nav-dot {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  margin-left: 7px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--c-danger);
+  box-shadow: 0 0 0 2px var(--c-surface);
+}
+
+/* 路由过渡 */
+.sl-page {
+  animation: sl-page-in 600ms var(--ease-out) both;
+}
+@keyframes sl-page-in {
+  from { opacity: 0; transform: translate3d(0, 16px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 列表 stagger：backwards 填充，结束后不残留 transform（否则压掉 active:scale） */
+.sl-rise {
+  animation: sl-rise 620ms var(--ease-out) backwards;
+  animation-delay: calc(var(--i, 0) * 55ms);
+}
+@keyframes sl-rise {
+  from { opacity: 0; transform: translate3d(0, 16px, 0); }
+  to { opacity: 1; transform: none; }
+}
+
+/* 标题排版：mono kicker + 中文 hero */
+.sl-kicker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  line-height: 1;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--c-ink-3);
+}
+.sl-kicker::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--c-brand);
+  box-shadow: 0 0 0 3px rgba(62, 152, 255, 0.14);
+}
+.sl-kicker-rule { height: 1px; flex: 1 1 0; background: var(--c-border-2); }
+
+.sl-hero {
+  font-size: 27px;
+  font-weight: 600;
+  line-height: 1.14;
+  letter-spacing: -0.035em;
+  color: var(--c-ink);
+  text-wrap: balance;
+}
+.sl-hero-sub {
+  margin-top: 7px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--c-ink-3);
+}
+
+/* 胶囊小按钮（标题行操作） */
+.sl-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--c-border);
+  background: var(--c-surface);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-ink-2);
+  white-space: nowrap;
+  transition: transform 260ms var(--ease-spring), border-color 200ms var(--ease), color 200ms var(--ease), background 200ms var(--ease);
+}
+.sl-mini svg { width: 14px; height: 14px; }
+.sl-mini:hover { border-color: var(--c-ink-3); color: var(--c-ink); }
+.sl-mini:active { transform: scale(0.95); }
+.sl-mini[data-solid="true"],
+.sl-mini[aria-pressed="true"] {
+  background: var(--c-ink);
+  border-color: var(--c-ink);
+  color: #fff;
+}
+.sl-mini[data-solid="true"]:hover,
+.sl-mini[aria-pressed="true"]:hover { color: #fff; }
+.sl-mini:disabled { opacity: 0.45; }
+
+/* ===== v1.29 · 全局路由骨架屏（app/loading.tsx）：点击即出，不等 RSC ===== */
+.sl-skel {
+  position: relative;
+  overflow: hidden;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c-ink-3) 15%, transparent);
+  animation: sl-skel-pulse 1.5s ease-in-out infinite;
+}
+/* 一道扫光：骨架块不只是呼吸，还有内容「正在赶来」的方向感 */
+.sl-skel::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.75) 50%, transparent 80%);
+  transform: translateX(-100%);
+  animation: sl-sheen 1.5s ease-in-out infinite;
+}
+@keyframes sl-skel-pulse {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 0.95; }
+}
+@keyframes sl-sheen {
+  to { transform: translateX(100%); }
+}
+/* 点击后导航还没落地时，被点的 Tab 图标先「变淡」，配合药丸滑动给出反馈 */
+.sl-nav-item[data-pending="true"] .sl-nav-icon { opacity: 0.55; }
+
+/* v1.28.1：Windows 默认常开「减少动画」——一刀切掉会让整站毫无质感，
+   所以这里只降速、不关闭（我们本来也没有连续循环动效）。 */
+@media (prefers-reduced-motion: reduce) {
+  .sl-page { animation-duration: 0.42s !important; }
+  /* 错峰延迟保留：这是「顺序感」，不是位移，减少动画时也不必抹掉 */
+  .sl-rise { animation-duration: 0.46s !important; }
+  .sl-nav-pill { transition-duration: 0.2s !important; }
+  .sl-nav-item[data-active="true"] .sl-nav-icon > * { animation-duration: 0.42s !important; }
+  /* 骨架屏是循环动效，减少动画时直接给静态色块（扫光一起关掉，否则白条还在跑） */
+  .sl-skel { animation: none !important; opacity: 0.8; }
+  .sl-skel::after {
+    animation: none !important;
+    opacity: 0;
+  }
+  /* 转圈是「还在跑」的唯一信号，不能删，只降速 */
+  .sl-spinner { animation-duration: 1.4s !important; }
+  .sl-dots > i { animation-duration: 1.6s !important; }
+}
+
+/* ===== v1.35 · Editorial Luxury（暖奶油纸张主题） ===== */
+/* 设计依据：high-end-visual-design skill 的 Editorial Luxury 档——暖奶油纸背、微噪点、
+   双框纸卡（Double-Bezel）、衬线大标题 + 等宽 eyebrow、弹簧曲线动效。
+   实现方式：只覆写 tokens 与复合类，不改任何业务类名；回档包
+   .data/backups/shunlu-src-v1.34-pre-theme-20261025-1908.tgz。 */
+
+:root {
+  /* 纸背 / 纸面（卡）/ 次级纸 */
+  --c-bg: #f4efe4;
+  --c-surface: #fdfaf4;
+  --c-surface-2: #efe7d8;
+  /* 墨色三级 */
+  --c-ink: #241f19;
+  --c-ink-2: #5d5548;
+  --c-ink-3: #9b9081;
+  /* 暖 hairline（不再是灰） */
+  --c-border: #ded3bf;
+  --c-border-2: #eae1d1;
+  /* 焦褐：与 v1.27 起就有的 #b45309 同色系，压暗到纸墨可读 */
+  --c-accent: #8a5a2f;
+  --c-accent-soft: #f5ecdd;
+  --c-accent-border: #e0cdb2;
+  --c-danger: #a4452f;
+  /* 纸页圆角略放大：纸片感来自「微微卷边」，不是 8px 方卡 */
+  --radius-sm: 9px;
+  --radius: 13px;
+  --radius-lg: 16px;
+  /* 阴影改成「纸张压在纸面上」的暖褐低对比投影，不用黑 */
+  --shadow-1: 0 1px 1px rgba(72, 56, 38, 0.05), 0 10px 22px -14px rgba(72, 56, 38, 0.22);
+  --shadow-2: 0 2px 3px rgba(72, 56, 38, 0.06), 0 22px 44px -22px rgba(72, 56, 38, 0.30);
+  /* 弹簧曲线：质量感更强（skill §5：禁止 linear / ease-in-out） */
+  --dur: 220ms;
+  --ease: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-spring: cubic-bezier(0.24, 1.08, 0.32, 1);
+  /* 内层 hairline（Double-Bezel 外框那道细线） */
+  --paper-ink: rgba(72, 56, 38, 0.12);
+  /* v1.27 的蓝色品牌色在纸面上跑偏，换成山吹褐 */
+  --c-brand: #a8763f;
+  --c-brand-ink: #8a5a2f;
+  --c-brand-line: rgba(168, 118, 63, 0.45);
+  /* 中文衬线兜底：Instrument Serif 只有拉丁字形，汉字落到系统宋体 */
+  --font-serif-cn: "Songti SC", "Source Han Serif SC", "Noto Serif SC", "SimSun", Georgia, serif;
+  --font-sans-cn: ui-sans-serif, system-ui, -apple-system, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+}
+
+/* 纸背：整页一层极缓的奶油到米色渐变（fixed，不随滚动重绘） */
+body {
+  background-color: var(--c-bg);
+  background-image: radial-gradient(125% 80% at 50% -12%, #fdf9f0 0%, #f6f1e6 44%, #efe8d9 100%);
+  background-attachment: fixed;
+  /* skill §2 禁用 Inter / Helvetica：改成系统无衬线栈（中文走苹方 / 微软雅黑） */
+  font-family: var(--font-sans-cn);
+  color: var(--c-ink);
+}
+
+/* 纸张噪点（skill §3 A2 / §6：只挂 fixed 伪元素，绝不挂滚动容器）
+   4.5% multiply：近看有纤维感，远看仍是干净的奶油纸 */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  pointer-events: none;
+  opacity: 0.045;
+  mix-blend-mode: multiply;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 width=%27160%27 height=%27160%27%3E%3Cfilter id=%27n%27%3E%3CfeTurbulence type=%27fractalNoise%27 baseFrequency=%270.82%27 numOctaves=%273%27 stitchTiles=%27stitch%27/%3E%3C/filter%3E%3Crect width=%27160%27 height=%27160%27 filter=%27url(%23n)%27 opacity=%270.6%27/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--c-accent) 22%, transparent);
+}
+
+/* ---- 纸卡（Double-Bezel 的「内芯」层）----
+   外框那道 ring 用 box-shadow 0 0 0 1px 模拟，这样 38 处 .sl-card 不用改 DOM；
+   顶部 1px 白色内高光 = 纸张被压出的高光边。 */
+.sl-card {
+  position: relative;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0) 46%),
+    var(--c-surface);
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  box-shadow:
+    0 0 0 1px var(--paper-ink),
+    var(--shadow-1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+/* 选中态（OrderCard 用 aria-pressed 标）——Tailwind 的 border 工具类进了 layer，
+   会被上面这条未分层的规则盖掉，所以选中态必须在这里显式补回来 */
+.sl-card[aria-pressed="true"] {
+  box-shadow:
+    0 0 0 1.5px var(--c-ink),
+    var(--shadow-1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.9);
+}
+
+/* ---- 纸面输入框：暖 hairline + 内凹浅影，focus 用焦褐光圈 ---- */
+.sl-field {
+  background: #fefcf7;
+  border: 1px solid var(--paper-ink);
+  border-radius: 12px;
+  box-shadow: inset 0 1px 2px rgba(72, 56, 38, 0.05);
+  transition: border-color var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+}
+.sl-field:focus,
+.sl-field:focus-within {
+  border-color: rgba(138, 90, 47, 0.5);
+  box-shadow: 0 0 0 3px rgba(138, 90, 47, 0.12), inset 0 1px 2px rgba(72, 56, 38, 0.04);
+}
+
+/* ---- 按钮：胶囊形（skill §4 B 的 Island CTA）+ 纸面内高光 ---- */
+.sl-btn {
+  border-radius: 999px;
+  letter-spacing: 0.01em;
+}
+
+/* ---- 字号层级：标题走衬线，eyebrow 走等宽小字 ---- */
+.sl-hero {
+  font-family: var(--font-display, Georgia), var(--font-serif-cn);
+  font-weight: 400;
+  font-size: 30px;
+  line-height: 1.16;
+  letter-spacing: -0.005em;
+}
+.sl-display {
+  font-family: var(--font-display, Georgia), var(--font-serif-cn);
+  font-weight: 400;
+  letter-spacing: -0.005em;
+}
+.sl-kicker {
+  font-family: var(--font-mono, ui-monospace), ui-monospace, monospace;
+  font-size: 10px;
+  line-height: 1.4;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--c-ink-3);
+}
+/* 顶栏 logo：衬线 + 焦褐细底线 */
+.sl-logo {
+  font-family: var(--font-display, Georgia), var(--font-serif-cn);
+  font-weight: 400;
+  font-size: 20px;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
+}
+
+/* ---- 底栏：从「贴底通栏」改成悬浮纸胶囊（skill §5 A Fluid Island）----
+   仍然 fixed / z-30；左右各留 12px，圆角 999px，毛玻璃只挂在这类固定层上。 */
+.sl-nav {
+  position: fixed;
+  left: 50%;
+  right: auto;
+  bottom: calc(10px + env(safe-area-inset-bottom));
+  width: min(calc(100% - 24px), 456px);
+  transform: translateX(-50%);
+  border: 1px solid var(--paper-ink);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c-surface) 84%, transparent);
+  backdrop-filter: blur(18px) saturate(150%);
+  -webkit-backdrop-filter: blur(18px) saturate(150%);
+  box-shadow: var(--shadow-2), inset 0 1px 0 rgba(255, 255, 255, 0.85);
+}
+.sl-nav-pill {
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--c-accent) 11%, transparent);
+}
+
+/* ---- 骨架屏改成「铅字条」：不是灰色胶囊，是压进纸面的铅字块 ---- */
+.sl-skel {
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--c-ink-3) 24%, transparent);
+  box-shadow: inset 0 1px 1px rgba(72, 56, 38, 0.16), inset 0 -1px 0 rgba(255, 255, 255, 0.5);
+  animation: sl-skel-pulse 2s var(--ease) infinite;
+}
+/* 扫光改成「纸面吸光」：更窄更软的一道，不是白条横冲 */
+.sl-skel::after {
+  background: linear-gradient(100deg, transparent 34%, rgba(255, 255, 255, 0.62) 50%, transparent 66%);
+  animation: sl-sheen 2s var(--ease) infinite;
+}
+
+/* ---- 双框纸卡外壳（loading.tsx / LoadingBlock 用；DOM 里显式两层）---- */
+.sl-paper {
+  padding: 5px;
+  border-radius: calc(var(--radius-lg) + 5px);
+  background: color-mix(in srgb, var(--c-ink) 4%, transparent);
+  box-shadow: 0 0 0 1px var(--paper-ink), inset 0 1px 0 rgba(255, 255, 255, 0.55);
+}
+.sl-paper-core {
+  border-radius: var(--radius-lg);
+  background: var(--c-surface);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.9);
+}
+
+/* ---- 小药丸按钮（倍率 / 筛选）也统一成胶囊 ---- */
+.sl-mini {
+  border-radius: 999px;
+}
+
+/* v1.35 · 减少动画时的补充：噪点本来就是静态层，无需处理；
+   骨架的呼吸/扫光由上面的 v1.28.1 段统一关掉，这里只补新增类的过渡时长 */
+@media (prefers-reduced-motion: reduce) {
+  .sl-field {
+    transition-duration: 0.12s;
+  }
+}
+
+/* ---- v1.35 · 锚点颜色补丁（未分层，必须留在文件末尾）----
+   `app/layout.tsx:3` 的 `import "antd-mobile/es/global"` 注入了一版**未分层**的
+   `a { color: #1677ff }`；Tailwind v4 的 utilities 都在 `@layer` 里，而未分层规则
+   永远压过任何 @layer —— 于是所有 `<a>` 上的 `text-[var(--c-*)]` 全部失效
+   （logo「顺路」、空态「发布订单」变 antd 蓝，而同款的 <button> 正常）。
+   这里用未分层的属性选择器把常用色板原样复刻回来；刻意不设 text-decoration，
+   以免压掉显式的 `underline` 类。 */
+a {
+  color: inherit;
+}
+a[class*="text-[var(--c-ink)]"] {
+  color: var(--c-ink);
+}
+a[class*="text-[var(--c-ink-2)]"] {
+  color: var(--c-ink-2);
+}
+a[class*="text-[var(--c-ink-3)]"] {
+  color: var(--c-ink-3);
+}
+a[class*="text-[var(--c-accent)]"] {
+  color: var(--c-accent);
+}
+a[class*="text-[var(--c-danger)]"] {
+  color: var(--c-danger);
+}
+a[class*="text-white"] {
+  color: #ffffff;
+}
+/* hover 变体同样被未分层规则盖住，单独补一条（app/page.tsx:315 → /me 小链接）*/
+a[class*="hover:text-[var(--c-ink-2)]"]:hover {
+  color: var(--c-ink-2);
+}
+
+
